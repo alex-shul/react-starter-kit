@@ -31,6 +31,12 @@ import schema from './data/schema';
 // import assets from './asset-manifest.json'; // eslint-disable-line import/no-unresolved
 import chunks from './chunk-manifest.json'; // eslint-disable-line import/no-unresolved
 import config from './config';
+import {iOS} from "./utils/common";
+import configureStore from './store/configureStore';
+import { Provider } from 'react-redux';
+import 'winston-daily-rotate-file';
+import logger from "./server/logger";
+import url from 'url';
 
 process.on('unhandledRejection', (reason, p) => {
   console.error('Unhandled Rejection at:', p, 'reason:', reason);
@@ -140,6 +146,15 @@ app.get('*', async (req, res, next) => {
       graphql,
     });
 
+    const initialState = {
+      user: req.user || null,
+    };
+
+    const store = configureStore(initialState, {
+      fetch,
+      // I should not use `history` on server.. but how I do redirection? follow universal-router
+    });
+
     // Global (context) variables that can be easily accessed from any React component
     // https://facebook.github.io/react/docs/context.html
     const context = {
@@ -147,20 +162,38 @@ app.get('*', async (req, res, next) => {
       // The twins below are wild, be careful!
       pathname: req.path,
       query: req.query,
+      protocol: res.protocol,
+      headers: req.headers,
+      // You can access redux through react-redux connect
+      store,
+      storeSubscription: null,
     };
+
+    // Common action for all reducers
+    store.dispatch({type: 'SERVER_INIT', payload: context});
 
     const route = await router.resolve(context);
 
     if (route.redirect) {
-      res.redirect(route.status || 302, route.redirect);
+      res.redirect(
+        route.status || 302,
+        route.redirect.indexOf('?') > -1
+          ? route.redirect
+          : url.format({
+            pathname: route.redirect,
+            query: req.query
+          })
+      );
       return;
     }
 
     const data = { ...route };
     data.children = ReactDOM.renderToString(
-      <App context={context} insertCss={insertCss}>
-        {route.component}
-      </App>,
+      <Provider store={store}>
+        <App context={context} insertCss={insertCss}>
+          {route.component}
+        </App>
+      </Provider>,
     );
     data.styles = [{ id: 'css', cssText: [...css].join('') }];
 
@@ -179,6 +212,8 @@ app.get('*', async (req, res, next) => {
     data.scripts = Array.from(scripts);
     data.app = {
       apiUrl: config.api.clientUrl,
+      state: context.store.getState(),
+      iOS: iOS(context)
     };
 
     const html = ReactDOM.renderToStaticMarkup(<Html {...data} />);
@@ -198,7 +233,13 @@ pe.skipPackage('express');
 
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
-  console.error(pe.render(err));
+  if (__DEV__) {
+    console.error(pe.render(err));
+  } else {
+    const printedHeaders = Object.keys(req.headers).map(h => `\t${h}: ${req.headers[h]}\n`).join('');
+    logger.error(`Requested path: ${req.path}\nRequested query params: ${JSON.stringify(req.query)}\nHeaders:\n${printedHeaders}-------------------\n${err.name}\n-------------------\n${err.stack}\n\n\n\n`);
+  }
+
   const html = ReactDOM.renderToStaticMarkup(
     <Html
       title="Internal Server Error"

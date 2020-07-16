@@ -15,6 +15,8 @@ import queryString from 'query-string';
 import { createPath } from 'history';
 import App from './components/App';
 import createFetch from './createFetch';
+import configureStore from './store/configureStore';
+import { Provider } from 'react-redux';
 import history from './history';
 import { updateMeta } from './DOMUtils';
 import router from './router';
@@ -36,7 +38,13 @@ const context = {
   fetch: createFetch(fetch, {
     baseUrl: window.App.apiUrl,
   }),
+  // Initialize a new Redux store
+  // http://redux.js.org/docs/basics/UsageWithReact.html
+  store: configureStore(window.App.state, { history }),
+  storeSubscription: null,
 };
+
+context.store.dispatch({type: 'CLIENT_INIT', payload: context});
 
 const container = document.getElementById('app');
 let currentLocation = history.location;
@@ -73,15 +81,17 @@ async function onLocationChange(location, action) {
     }
 
     if (route.redirect) {
-      history.replace(route.redirect);
+      history.replace(route.redirect.indexOf('?') > -1 ? route.redirect : `${route.redirect}${location.search}`);
       return;
     }
 
     const renderReactApp = isInitialRender ? ReactDOM.hydrate : ReactDOM.render;
     appInstance = renderReactApp(
-      <App context={context} insertCss={insertCss}>
-        {route.component}
-      </App>,
+      <Provider store={context.store}>
+        <App context={context} insertCss={insertCss}>
+          {route.component}
+        </App>
+      </Provider>,
       container,
       () => {
         if (isInitialRender) {
